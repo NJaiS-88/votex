@@ -1,0 +1,9 @@
+# Root env safety
+.env
+.env.*
+!.env.example
+
+# Keep nested examples
+!frontend/.env.example
+!frontend/.env.production.example
+!backend/.env.example

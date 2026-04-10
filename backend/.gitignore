@@ -1,0 +1,10 @@
+node_modules
+npm-debug.log*
+
+# Build artifacts
+dist
+
+# Environment files
+.env
+.env.*
+!.env.example
