@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 * {
   box-sizing: border-box;
@@ -8,4 +9,97 @@ body {
   margin: 0;
   font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
   background: #020617;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+:root {
+  --accent-400: 129 140 248;
+  --accent-500: 99 102 241;
+  --accent-600: 79 70 229;
+}
+
+.scheme-indigo {
+  --accent-400: 129 140 248;
+  --accent-500: 99 102 241;
+  --accent-600: 79 70 229;
+}
+
+.scheme-teal {
+  --accent-400: 45 212 191;
+  --accent-500: 20 184 166;
+  --accent-600: 13 148 136;
+}
+
+.scheme-slate {
+  --accent-400: 148 163 184;
+  --accent-500: 100 116 139;
+  --accent-600: 71 85 105;
+}
+
+.scheme-rose {
+  --accent-400: 251 113 133;
+  --accent-500: 244 63 94;
+  --accent-600: 225 29 72;
+}
+
+@layer components {
+  .page-shell {
+    @apply mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8;
+  }
+
+  .ui-card {
+    @apply rounded-2xl border border-slate-200/80 bg-white/90 shadow-sm backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/80;
+  }
+
+  .ui-card-soft {
+    @apply rounded-xl border border-slate-200/70 bg-white/70 dark:border-slate-800/70 dark:bg-slate-900/60;
+  }
+
+  .ui-title {
+    @apply text-2xl font-semibold tracking-tight text-slate-900 dark:text-white;
+  }
+
+  .ui-subtitle {
+    @apply text-sm text-slate-500 dark:text-slate-400;
+  }
+
+  .ui-input {
+    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 outline-none transition focus:ring-2 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100;
+    border-color: rgb(203 213 225);
+  }
+
+  .ui-input:focus {
+    border-color: rgb(var(--accent-400));
+    box-shadow: 0 0 0 2px rgba(var(--accent-400), 0.2);
+  }
+
+  .ui-btn {
+    @apply inline-flex items-center justify-center rounded-lg border px-4 py-2 text-sm font-medium transition;
+    border-color: transparent;
+  }
+
+  .ui-btn-primary {
+    @apply inline-flex items-center justify-center rounded-lg border px-4 py-2 text-sm font-medium text-white transition;
+    border-color: transparent;
+    background-color: rgb(var(--accent-500));
+  }
+
+  .ui-btn-primary:hover {
+    background-color: rgb(var(--accent-400));
+  }
+
+  .ui-btn-success {
+    @apply inline-flex items-center justify-center rounded-lg border border-emerald-700/20 bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-500;
+  }
+
+  .ui-btn-danger {
+    @apply inline-flex items-center justify-center rounded-lg border border-rose-700/20 bg-rose-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-500;
+  }
+
+  .ui-btn-ghost {
+    @apply inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700;
+  }
 }

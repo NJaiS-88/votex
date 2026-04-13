@@ -97,10 +97,31 @@ const getMyMeetingHistory = async (req, res) => {
       ],
     })
       .sort({ updatedAt: -1 })
-      .limit(20);
+      .limit(50);
     return res.status(200).json({ meetings });
   } catch {
     return res.status(500).json({ message: "Could not fetch meeting history" });
+  }
+};
+
+const updateMeetingSettings = async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const { allowAllParticipants } = req.body;
+    const meeting = await Meeting.findOne({ roomId });
+    if (!meeting) return res.status(404).json({ message: "Meeting not found" });
+    if (meeting.host?.userId !== String(req.user._id)) {
+      return res.status(403).json({ message: "Only admin can update settings" });
+    }
+
+    meeting.meetingSettings = {
+      ...meeting.meetingSettings,
+      allowAllParticipants: Boolean(allowAllParticipants),
+    };
+    await meeting.save();
+    return res.status(200).json({ meeting });
+  } catch {
+    return res.status(500).json({ message: "Could not update meeting settings" });
   }
 };
 
@@ -110,4 +131,5 @@ module.exports = {
   saveRecordingMetadata,
   getMeeting,
   getMyMeetingHistory,
+  updateMeetingSettings,
 };

@@ -1,4 +1,5 @@
 const rooms = new Map();
+const roomState = new Map();
 const Meeting = require("../models/Meeting");
 
 const getRoom = (roomId) => {
@@ -8,58 +9,139 @@ const getRoom = (roomId) => {
   return rooms.get(roomId);
 };
 
+const getRoomState = (roomId) => {
+  if (!roomState.has(roomId)) {
+    roomState.set(roomId, { forcedPinnedPeerId: null });
+  }
+  return roomState.get(roomId);
+};
+
+const getParticipants = (roomId) =>
+  rooms.has(roomId) ? Array.from(rooms.get(roomId).values()) : [];
+
+const emitParticipants = (io, roomId) => {
+  io.to(roomId).emit("participant-list-updated", {
+    participants: getParticipants(roomId),
+  });
+};
+
+const emitPinState = (io, roomId) => {
+  const participants = getParticipants(roomId);
+  const sharingPeerIds = participants
+    .filter((participant) => participant.isScreenSharing)
+    .map((participant) => participant.peerId);
+  const state = getRoomState(roomId);
+  if (sharingPeerIds.length === 1) {
+    state.forcedPinnedPeerId = sharingPeerIds[0];
+  } else if (sharingPeerIds.length === 0) {
+    state.forcedPinnedPeerId = null;
+  } else if (!sharingPeerIds.includes(state.forcedPinnedPeerId)) {
+    state.forcedPinnedPeerId = null;
+  }
+  io.to(roomId).emit("room-pin-updated", {
+    forcedPinnedPeerId: state.forcedPinnedPeerId,
+    sharingPeerIds,
+  });
+};
+
+const removeParticipant = (io, socket, roomId) => {
+  const room = rooms.get(roomId);
+  if (!room) return;
+
+  room.delete(socket.id);
+  socket.to(roomId).emit("user-left", { peerId: socket.id });
+  emitParticipants(io, roomId);
+  emitPinState(io, roomId);
+
+  if (room.size === 0) {
+    rooms.delete(roomId);
+    roomState.delete(roomId);
+  }
+};
+
 const registerMeetingSocket = (io) => {
   io.on("connection", (socket) => {
     socket.on("join-room", async ({ roomId, user }) => {
       if (!roomId || !user?.name) return;
 
+      const meeting = await Meeting.findOne({ roomId });
       const room = getRoom(roomId);
+      const hasHostOnline = Array.from(room.values()).some((participant) => participant.isHost);
+      const isMeetingHost = meeting?.host?.userId && meeting.host.userId === user.userId;
+      const shouldBlockWithoutHost =
+        !hasHostOnline &&
+        room.size === 0 &&
+        !!meeting?.host?.userId &&
+        !isMeetingHost &&
+        !meeting?.meetingSettings?.allowAllParticipants;
+
+      if (shouldBlockWithoutHost) {
+        socket.emit("host-unavailable", {
+          message: "You will be let in when admin joins.",
+        });
+        return;
+      }
+
       const participant = {
         userId: user.userId || "",
         name: user.name,
         email: user.email || "",
+        avatarUrl: user.avatarUrl || "",
         peerId: socket.id,
-        isHost: room.size === 0,
-        audioEnabled: true,
-        videoEnabled: true,
+        isHost: Boolean(isMeetingHost) || (room.size === 0 && !meeting?.host?.userId),
+        audioEnabled: user.audioEnabled ?? true,
+        videoEnabled: user.videoEnabled ?? true,
+        isScreenSharing: false,
       };
-      room.set(socket.id, participant);
 
+      room.set(socket.id, participant);
       socket.join(roomId);
       socket.data.roomId = roomId;
       socket.data.user = participant;
 
-      await Meeting.findOneAndUpdate(
-        { roomId },
-        {
-          $setOnInsert: {
-            roomId,
-            startedAt: new Date(),
-            host: {
-              userId: participant.userId,
-              name: participant.name,
-              email: participant.email,
-              peerId: socket.id,
-            },
-          },
-          $push: {
-            participantHistory: {
-              userId: participant.userId,
-              name: participant.name,
-              email: participant.email,
-              peerId: socket.id,
-              joinedAt: new Date(),
-            },
+      const update = {
+        $setOnInsert: {
+          roomId,
+          startedAt: new Date(),
+          host: {
+            userId: participant.userId,
+            name: participant.name,
+            email: participant.email,
+            peerId: socket.id,
+            avatarUrl: participant.avatarUrl,
           },
         },
-        { upsert: true }
-      );
+        $push: {
+          participantHistory: {
+            userId: participant.userId,
+            name: participant.name,
+            email: participant.email,
+            peerId: socket.id,
+            avatarUrl: participant.avatarUrl,
+            joinedAt: new Date(),
+          },
+        },
+      };
+      if (participant.isHost) {
+        delete update.$setOnInsert.host;
+        update.$set = {
+          host: {
+            userId: participant.userId,
+            name: participant.name,
+            email: participant.email,
+            peerId: socket.id,
+            avatarUrl: participant.avatarUrl,
+          },
+        };
+      }
+
+      await Meeting.findOneAndUpdate({ roomId }, update, { upsert: true });
 
       const existingParticipants = Array.from(room.entries())
         .filter(([peerId]) => peerId !== socket.id)
-        .map(([peerId, participant]) => ({
+        .map(([peerId, otherParticipant]) => ({
           peerId,
-          user: participant,
+          user: otherParticipant,
         }));
 
       socket.emit("existing-participants", existingParticipants);
@@ -67,9 +149,8 @@ const registerMeetingSocket = (io) => {
         peerId: socket.id,
         user: room.get(socket.id),
       });
-      io.to(roomId).emit("participant-list-updated", {
-        participants: Array.from(room.values()),
-      });
+      emitParticipants(io, roomId);
+      emitPinState(io, roomId);
     });
 
     socket.on("signal-offer", ({ targetPeerId, offer, roomId, sender }) => {
@@ -103,8 +184,14 @@ const registerMeetingSocket = (io) => {
         {
           $push: {
             chatMessages: {
+              senderId: message.senderId,
               sender: message.sender,
+              senderAvatarUrl: message.senderAvatarUrl || "",
+              type: message.type || "text",
               text: message.text,
+              code: message.code || "",
+              language: message.language || "",
+              attachments: message.attachments || [],
               createdAt: message.createdAt || new Date(),
             },
           },
@@ -121,6 +208,7 @@ const registerMeetingSocket = (io) => {
         {
           $push: {
             reactions: {
+              senderId: reaction.senderId || "",
               sender: reaction.sender,
               emoji: reaction.emoji,
               createdAt: new Date(),
@@ -136,9 +224,8 @@ const registerMeetingSocket = (io) => {
       if (!room || !room.has(socket.id)) return;
       const current = room.get(socket.id);
       room.set(socket.id, { ...current, ...updates });
-      io.to(roomId).emit("participant-list-updated", {
-        participants: Array.from(room.values()),
-      });
+      emitParticipants(io, roomId);
+      emitPinState(io, roomId);
     });
 
     socket.on("host-action", ({ roomId, targetPeerId, action }) => {
@@ -155,35 +242,13 @@ const registerMeetingSocket = (io) => {
 
     socket.on("leave-room", ({ roomId }) => {
       if (!roomId) return;
-      const room = rooms.get(roomId);
-      if (!room) return;
-
-      room.delete(socket.id);
-      socket.to(roomId).emit("user-left", { peerId: socket.id });
-      io.to(roomId).emit("participant-list-updated", {
-        participants: Array.from(room.values()),
-      });
-
-      if (room.size === 0) {
-        rooms.delete(roomId);
-      }
+      removeParticipant(io, socket, roomId);
     });
 
     socket.on("disconnecting", () => {
       for (const roomId of socket.rooms) {
         if (roomId === socket.id) continue;
-        const room = rooms.get(roomId);
-        if (!room) continue;
-
-        room.delete(socket.id);
-        socket.to(roomId).emit("user-left", { peerId: socket.id });
-        io.to(roomId).emit("participant-list-updated", {
-          participants: Array.from(room.values()),
-        });
-
-        if (room.size === 0) {
-          rooms.delete(roomId);
-        }
+        removeParticipant(io, socket, roomId);
       }
     });
   });

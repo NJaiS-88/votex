@@ -1,5 +1,6 @@
 const bcrypt = require("bcryptjs");
 const User = require("../models/User");
+const Meeting = require("../models/Meeting");
 const generateToken = require("../utils/generateToken");
 
 const signup = async (req, res) => {
@@ -35,6 +36,9 @@ const signup = async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        avatarUrl: user.avatarUrl || "",
+        theme: user.theme || "dark",
+        colorScheme: user.colorScheme || "indigo",
       },
     });
   } catch (error) {
@@ -72,6 +76,9 @@ const login = async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
+        avatarUrl: user.avatarUrl || "",
+        theme: user.theme || "dark",
+        colorScheme: user.colorScheme || "indigo",
       },
     });
   } catch (error) {
@@ -88,4 +95,71 @@ const getMe = async (req, res) => {
   return res.status(200).json({ user: req.user });
 };
 
-module.exports = { signup, login, getMe };
+const updateMe = async (req, res) => {
+  try {
+    const { name, avatarUrl, theme, colorScheme } = req.body;
+    if (!name?.trim()) {
+      return res.status(400).json({ message: "Name is required" });
+    }
+    req.user.name = name.trim();
+    req.user.avatarUrl = (avatarUrl || "").trim();
+    if (theme === "light" || theme === "dark") {
+      req.user.theme = theme;
+    }
+    if (["indigo", "teal", "slate", "rose"].includes(colorScheme)) {
+      req.user.colorScheme = colorScheme;
+    }
+    await req.user.save();
+    return res.status(200).json({
+      user: {
+        id: req.user._id,
+        name: req.user.name,
+        email: req.user.email,
+        avatarUrl: req.user.avatarUrl || "",
+        theme: req.user.theme || "dark",
+        colorScheme: req.user.colorScheme || "indigo",
+      },
+    });
+  } catch {
+    return res.status(500).json({ message: "Could not update profile" });
+  }
+};
+
+const resetMyData = async (req, res) => {
+  try {
+    const userId = String(req.user._id);
+    await Meeting.deleteMany({ "host.userId": userId });
+    await Meeting.updateMany(
+      { "host.userId": { $ne: userId } },
+      {
+        $pull: {
+          participantHistory: { userId },
+          chatMessages: { senderId: userId },
+          reactions: { senderId: userId },
+        },
+      }
+    );
+
+    req.user.avatarUrl = "";
+    req.user.theme = "dark";
+    req.user.colorScheme = "indigo";
+    req.user.name = req.user.email.split("@")[0];
+    await req.user.save();
+
+    return res.status(200).json({
+      message: "Your data has been reset",
+      user: {
+        id: req.user._id,
+        name: req.user.name,
+        email: req.user.email,
+        avatarUrl: "",
+        theme: "dark",
+        colorScheme: "indigo",
+      },
+    });
+  } catch {
+    return res.status(500).json({ message: "Could not reset data" });
+  }
+};
+
+module.exports = { signup, login, getMe, updateMe, resetMyData };

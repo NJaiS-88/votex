@@ -19,6 +19,21 @@ const userSchema = new mongoose.Schema(
       required: true,
       minlength: 6,
     },
+    avatarUrl: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    theme: {
+      type: String,
+      enum: ["light", "dark"],
+      default: "dark",
+    },
+    colorScheme: {
+      type: String,
+      enum: ["indigo", "teal", "slate", "rose"],
+      default: "indigo",
+    },
   },
   { timestamps: true }
 );

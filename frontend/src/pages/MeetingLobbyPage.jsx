@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../store/useAuthStore";
 import { getMyMeetingHistory } from "../api/meetingApi";
 
@@ -33,68 +33,87 @@ const MeetingLobbyPage = () => {
   };
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-3xl items-center px-4 py-8">
-      <div className="w-full rounded-2xl border border-slate-800 bg-slate-900/80 p-8">
-        <h1 className="text-2xl font-semibold">Meeting Lobby</h1>
-        <p className="mt-2 text-slate-300">
+    <div className="page-shell flex min-h-screen items-center">
+      <div className="ui-card w-full p-8">
+        <h1 className="ui-title">Meeting Lobby</h1>
+        <p className="ui-subtitle mt-2">
           Signed in as <span className="font-medium">{user?.email}</span>
         </p>
         <button
           type="button"
           onClick={handleLogout}
-          className="mt-4 rounded-lg bg-rose-500 px-4 py-2 font-medium hover:bg-rose-400"
+          className="ui-btn-danger mt-4"
         >
           Logout
         </button>
+        <Link to="/" className="ui-btn-ghost mt-4 ml-2">
+          Go to Main Page
+        </Link>
 
-        <div className="mt-8 rounded-xl border border-slate-700 p-5">
+        <div className="ui-card-soft mt-6 p-5">
           <h2 className="text-lg font-medium">Create New Meeting</h2>
-          <p className="mt-1 text-sm text-slate-400">
+          <p className="ui-subtitle mt-1">
             A meeting ID is generated automatically when you create.
           </p>
           <button
             type="button"
             onClick={handleCreateMeeting}
-            className="mt-4 rounded-lg bg-indigo-500 px-4 py-2 font-medium hover:bg-indigo-400"
+            className="ui-btn-primary mt-4"
           >
             Create & Join
           </button>
         </div>
 
-        <form onSubmit={handleJoinMeeting} className="mt-5 rounded-xl border border-slate-700 p-5">
+        <form onSubmit={handleJoinMeeting} className="ui-card-soft mt-4 p-5">
           <h2 className="text-lg font-medium">Join Existing Meeting</h2>
           <input
             value={meetingId}
             onChange={(event) => setMeetingId(event.target.value)}
             placeholder="Enter meeting ID"
-            className="mt-3 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 outline-none ring-indigo-500 focus:ring"
+            className="ui-input mt-3"
           />
           <button
             type="submit"
-            className="mt-4 rounded-lg bg-emerald-500 px-4 py-2 font-medium hover:bg-emerald-400"
+            className="ui-btn-success mt-4"
           >
             Join Meeting
           </button>
         </form>
 
-        <div className="mt-5 rounded-xl border border-slate-700 p-5">
-          <h2 className="text-lg font-medium">Recent Meetings & Replay Metadata</h2>
+        <div className="ui-card-soft mt-4 p-5">
+          <h2 className="text-lg font-medium">Recent Meetings</h2>
+          <p className="ui-subtitle mt-1">
+            Rejoin old meetings from the dedicated History page.
+          </p>
           <div className="mt-3 space-y-2">
             {history.length === 0 ? (
-              <p className="text-sm text-slate-400">No recent meetings found.</p>
+              <p className="ui-subtitle">No recent meetings found.</p>
             ) : (
               history.map((meeting) => (
-                <div key={meeting._id} className="rounded bg-slate-800 p-3 text-sm">
-                  <p className="font-medium text-indigo-300">{meeting.roomId}</p>
-                  <p className="text-slate-300">
+                <div key={meeting._id} className="rounded-xl border border-slate-200 bg-white/80 p-3 text-sm dark:border-slate-700 dark:bg-slate-800/80">
+                  <p className="font-medium text-indigo-500 dark:text-indigo-300">{meeting.roomId}</p>
+                  <p className="text-slate-600 dark:text-slate-300">
                     Status: {meeting.status} | Duration: {meeting.replayMetadata?.durationSec || 0}s
                   </p>
-                  <p className="text-slate-400">
+                  <p className="text-slate-500 dark:text-slate-400">
                     Participants: {meeting.replayMetadata?.totalParticipants || 0} | Messages:{" "}
                     {meeting.replayMetadata?.totalMessages || 0} | Reactions:{" "}
                     {meeting.replayMetadata?.totalReactions || 0} | Recordings:{" "}
                     {meeting.replayMetadata?.totalRecordings || 0}
                   </p>
+                  {(meeting.chatMessages || []).length ? (
+                    <div className="mt-2 rounded border border-slate-200 bg-slate-50 p-2 dark:border-slate-700 dark:bg-slate-900">
+                      <p className="mb-1 text-xs font-semibold text-slate-600 dark:text-slate-300">Notes</p>
+                      {(meeting.chatMessages || []).slice(-3).map((message) => (
+                        <div key={message._id || message.id} className="mb-1 text-xs text-slate-500 dark:text-slate-400">
+                          <span className="font-medium text-slate-700 dark:text-slate-200">{message.sender}:</span>{" "}
+                          {message.type === "media"
+                            ? `Shared ${(message.attachments || []).length} media item(s)`
+                            : message.code || message.text}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ))
             )}

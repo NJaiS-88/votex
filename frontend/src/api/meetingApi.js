@@ -16,3 +16,9 @@ export const saveRecordingMetadata = (roomId, payload) =>
 
 export const getMyMeetingHistory = () =>
   api.get("/meetings/history/my", { headers: authHeader() });
+
+export const getMeetingById = (roomId) =>
+  api.get(`/meetings/${roomId}`, { headers: authHeader() });
+
+export const updateMeetingSettings = (roomId, payload) =>
+  api.patch(`/meetings/${roomId}/settings`, payload, { headers: authHeader() });

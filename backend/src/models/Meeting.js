@@ -13,6 +13,7 @@ const meetingSchema = new mongoose.Schema(
       name: String,
       email: String,
       peerId: String,
+      avatarUrl: String,
     },
     startedAt: { type: Date, default: Date.now },
     endedAt: Date,
@@ -22,19 +23,42 @@ const meetingSchema = new mongoose.Schema(
         name: String,
         email: String,
         peerId: String,
+        avatarUrl: String,
         joinedAt: { type: Date, default: Date.now },
         leftAt: Date,
       },
     ],
+    meetingSettings: {
+      allowAllParticipants: { type: Boolean, default: false },
+    },
     chatMessages: [
       {
+        senderId: String,
         sender: String,
+        senderAvatarUrl: String,
+        type: {
+          type: String,
+          enum: ["text", "emoji", "code", "media", "system"],
+          default: "text",
+        },
         text: String,
+        code: String,
+        language: String,
+        attachments: [
+          {
+            kind: { type: String, enum: ["image", "video", "file"] },
+            url: String,
+            fileName: String,
+            mimeType: String,
+            sizeBytes: Number,
+          },
+        ],
         createdAt: { type: Date, default: Date.now },
       },
     ],
     reactions: [
       {
+        senderId: String,
         sender: String,
         emoji: String,
         createdAt: { type: Date, default: Date.now },

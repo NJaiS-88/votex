@@ -28,16 +28,16 @@ const SignupPage = () => {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-4 py-10">
+    <div className="page-shell flex min-h-screen items-center justify-center">
       <AuthCard
         title="Create account"
-        subtitle="Sign up to get started"
+        subtitle="Create your profile to start meetings"
         altText="Already have an account?"
         altLink="/login"
       >
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label htmlFor="name" className="mb-1 block text-sm text-slate-200">
+            <label htmlFor="name" className="mb-1 block text-sm text-slate-700 dark:text-slate-200">
               Name
             </label>
             <input
@@ -47,12 +47,12 @@ const SignupPage = () => {
               value={formData.name}
               onChange={handleChange}
               required
-              className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 outline-none ring-indigo-500 focus:ring"
+              className="ui-input"
             />
           </div>
 
           <div>
-            <label htmlFor="email" className="mb-1 block text-sm text-slate-200">
+            <label htmlFor="email" className="mb-1 block text-sm text-slate-700 dark:text-slate-200">
               Email
             </label>
             <input
@@ -62,12 +62,12 @@ const SignupPage = () => {
               value={formData.email}
               onChange={handleChange}
               required
-              className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 outline-none ring-indigo-500 focus:ring"
+              className="ui-input"
             />
           </div>
 
           <div>
-            <label htmlFor="password" className="mb-1 block text-sm text-slate-200">
+            <label htmlFor="password" className="mb-1 block text-sm text-slate-700 dark:text-slate-200">
               Password
             </label>
             <input
@@ -77,7 +77,7 @@ const SignupPage = () => {
               value={formData.password}
               onChange={handleChange}
               required
-              className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 outline-none ring-indigo-500 focus:ring"
+              className="ui-input"
             />
           </div>
 
@@ -86,7 +86,7 @@ const SignupPage = () => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-lg bg-indigo-500 py-2 font-medium hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-indigo-700"
+            className="ui-btn-primary w-full disabled:cursor-not-allowed disabled:bg-indigo-700"
           >
             {loading ? "Creating account..." : "Sign up"}
           </button>
