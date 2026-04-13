@@ -4,6 +4,7 @@ const VideoTile = ({
   videoRef,
   muted = false,
   videoEnabled = true,
+  audioEnabled = true,
   pinned = false,
   canPin = false,
   onTogglePin,
@@ -48,6 +49,9 @@ const VideoTile = ({
             {pinned ? "Unpin" : "Pin"}
           </button>
         ) : null}
+        <div className="absolute bottom-2 right-2 flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white">
+          {audioEnabled ? <TileMicOnIcon /> : <TileMicOffIcon />}
+        </div>
       </div>
       <div className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
         <div className="flex items-center gap-2">
@@ -65,5 +69,22 @@ const VideoTile = ({
     </div>
   );
 };
+
+const TileMicOnIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+    <rect x="9" y="3.5" width="6" height="11" rx="3" />
+    <path d="M5 11.5a7 7 0 0 0 14 0" />
+    <path d="M12 18.5v2.5" />
+  </svg>
+);
+
+const TileMicOffIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+    <rect x="9" y="3.5" width="6" height="11" rx="3" />
+    <path d="M5 11.5a7 7 0 0 0 14 0" />
+    <path d="M12 18.5v2.5" />
+    <path d="M4 4l16 16" />
+  </svg>
+);
 
 export default VideoTile;

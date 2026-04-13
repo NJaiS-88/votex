@@ -11,7 +11,7 @@ const meetingSchema = new mongoose.Schema(
     host: {
       userId: String,
       name: String,
-      email: String,
+      emailHash: String,
       peerId: String,
       avatarUrl: String,
     },
@@ -21,7 +21,7 @@ const meetingSchema = new mongoose.Schema(
       {
         userId: String,
         name: String,
-        email: String,
+        emailHash: String,
         peerId: String,
         avatarUrl: String,
         joinedAt: { type: Date, default: Date.now },

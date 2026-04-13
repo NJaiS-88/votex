@@ -1,4 +1,8 @@
 const Meeting = require("../models/Meeting");
+const crypto = require("crypto");
+
+const hashValue = (value = "") =>
+  crypto.createHash("sha256").update(String(value).toLowerCase().trim()).digest("hex");
 
 const startMeeting = async (req, res) => {
   try {
@@ -13,7 +17,7 @@ const startMeeting = async (req, res) => {
           host: {
             userId: String(req.user._id),
             name: req.user.name,
-            email: req.user.email,
+            emailHash: hashValue(req.user.email || req.user._id),
           },
         },
       },

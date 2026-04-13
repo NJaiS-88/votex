@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { io } from "socket.io-client";
 import { useAuthStore } from "../store/useAuthStore";
@@ -87,6 +87,7 @@ const MeetingRoomPage = () => {
   const cameraStreamRef = useRef(null);
   const audioEnabledRef = useRef(true);
   const videoEnabledRef = useRef(true);
+  const desiredAudioEnabledRef = useRef(true);
   const peersRef = useRef(new Map());
   const recorderRef = useRef(null);
   const recordedChunksRef = useRef([]);
@@ -109,11 +110,9 @@ const MeetingRoomPage = () => {
   const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl || "");
   const [manualPinnedPeerId, setManualPinnedPeerId] = useState("");
   const [forcedPinnedPeerId, setForcedPinnedPeerId] = useState("");
+  const [hostPinnedPeerId, setHostPinnedPeerId] = useState("");
   const [sharingPeerIds, setSharingPeerIds] = useState([]);
   const [tilePage, setTilePage] = useState(0);
-  const [chatMode, setChatMode] = useState("text");
-  const [mediaUrl, setMediaUrl] = useState("");
-  const [codeLanguage, setCodeLanguage] = useState("javascript");
   const [participantSearch, setParticipantSearch] = useState("");
   const [previousParticipants, setPreviousParticipants] = useState([]);
   const [permissionChecked, setPermissionChecked] = useState(false);
@@ -125,8 +124,18 @@ const MeetingRoomPage = () => {
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [showMobileDock, setShowMobileDock] = useState(false);
   const mobileDockTimerRef = useRef(null);
+  const desktopDockTimerRef = useRef(null);
+  const lastMicTouchAtRef = useRef(0);
+  const emojiPickerRef = useRef(null);
+  const hamburgerMenuRef = useRef(null);
+  const participantsPanelRef = useRef(null);
+  const chatPanelRef = useRef(null);
+  const diagnosticsPanelRef = useRef(null);
+  const tilesContainerRef = useRef(null);
+  const tileWheelCooldownRef = useRef(0);
   const [expandedCodeMessages, setExpandedCodeMessages] = useState({});
-  const [chatFiles, setChatFiles] = useState([]);
+  const [waitingParticipants, setWaitingParticipants] = useState([]);
+  const [joinApprovalStatus, setJoinApprovalStatus] = useState("approved");
 
   const { chatMessages, reactions } = useMeetingStore();
   const addChatMessage = useMeetingStore((state) => state.addChatMessage);
@@ -214,6 +223,31 @@ const MeetingRoomPage = () => {
     });
   };
 
+  const replaceOutgoingAudioTrack = useCallback((newAudioTrack) => {
+    peersRef.current.forEach(({ peerConnection }) => {
+      const audioSenders = peerConnection
+        .getSenders()
+        .filter((item) => item.track && item.track.kind === "audio");
+
+      if (audioSenders.length === 0 && newAudioTrack && localStreamRef.current) {
+        peerConnection.addTrack(newAudioTrack, localStreamRef.current);
+        return;
+      }
+
+      audioSenders.forEach((sender, index) => {
+        if (index === 0) {
+          sender.replaceTrack(newAudioTrack || null).catch(() => {});
+          return;
+        }
+        try {
+          peerConnection.removeTrack(sender);
+        } catch {
+          // Ignore remove errors; keep first audio sender as source of truth.
+        }
+      });
+    });
+  }, []);
+
   const startRecording = async () => {
     try {
       const displayStream = await navigator.mediaDevices.getDisplayMedia({
@@ -276,76 +310,22 @@ const MeetingRoomPage = () => {
     setRecording(false);
   };
 
-  const fileToDataUrl = (file) =>
-    new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-
-  const sendChatMessage = async (event) => {
+  const sendChatMessage = (event) => {
     event.preventDefault();
     const text = chatInput.trim();
-    const trimmedMediaUrl = mediaUrl.trim();
-    if (!text && !trimmedMediaUrl && chatFiles.length === 0) return;
+    if (!text) return;
     if (!socketRef.current?.connected) {
       setError("Chat is not connected yet. Please wait for meeting connection.");
       return;
     }
 
-    const type =
-      chatMode === "code"
-        ? "code"
-        : chatMode === "media"
-        ? "media"
-        : chatMode === "emoji"
-        ? "emoji"
-        : "text";
-
-    let attachments = [];
-    if (type === "media" && trimmedMediaUrl) {
-      const mediaKind = /\.(mp4|mov|avi|webm)$/i.test(trimmedMediaUrl) ? "video" : "image";
-      attachments.push({
-        kind: mediaKind,
-        url: trimmedMediaUrl,
-        fileName: "shared-media",
-        mimeType: mediaKind === "video" ? "video/mp4" : "image/*",
-      });
-    }
-
-    if (chatFiles.length > 0) {
-      const uploadedAttachments = [];
-      for (const file of chatFiles) {
-        try {
-          const fileDataUrl = await fileToDataUrl(file);
-          const mimeType = file.type || "application/octet-stream";
-          const kind = mimeType.startsWith("image/")
-            ? "image"
-            : mimeType.startsWith("video/")
-            ? "video"
-            : "file";
-          uploadedAttachments.push({
-            kind,
-            url: fileDataUrl,
-            fileName: file.name,
-            mimeType,
-            sizeBytes: file.size,
-          });
-        } catch {
-          setError(`Could not read file: ${file.name}`);
-        }
-      }
-      attachments = [...attachments, ...uploadedAttachments];
-    }
-
     const message = {
       id: crypto.randomUUID(),
       text,
-      type,
-      code: type === "code" ? text : "",
-      language: type === "code" ? codeLanguage : "",
-      attachments,
+      type: "text",
+      code: "",
+      language: "",
+      attachments: [],
       senderId: user?._id || user?.id || "",
       sender: user?.name || user?.email || "User",
       senderAvatarUrl: user?.avatarUrl || "",
@@ -354,8 +334,7 @@ const MeetingRoomPage = () => {
 
     socketRef.current?.emit("chat-message", { roomId, message });
     setChatInput("");
-    setMediaUrl("");
-    setChatFiles([]);
+    setShowChatPanel(false);
   };
 
   const sendReaction = (emoji) => {
@@ -369,17 +348,40 @@ const MeetingRoomPage = () => {
     socketRef.current?.emit("reaction", { roomId, reaction });
   };
 
-  const toggleAudio = () => {
-    const track = localStreamRef.current?.getAudioTracks()[0];
-    if (!track) return;
+  const emitAudioPresence = useCallback(
+    (next) => {
+      socketRef.current?.emit("participant-media-updated", {
+        roomId,
+        updates: { audioEnabled: next },
+      });
+    },
+    [roomId]
+  );
+
+  const toggleAudio = async () => {
+    let track = localStreamRef.current?.getAudioTracks()[0];
+    if (!track || track.readyState === "ended") {
+      const recovered = await ensureLiveMicrophoneTrack();
+      if (!recovered) {
+        setError("Microphone is unavailable. Please allow mic permission and retry.");
+        return;
+      }
+      track = localStreamRef.current?.getAudioTracks()[0];
+      if (!track) return;
+      const nextAfterRecovery = !audioEnabledRef.current;
+      desiredAudioEnabledRef.current = nextAfterRecovery;
+      track.enabled = nextAfterRecovery;
+      audioEnabledRef.current = nextAfterRecovery;
+      setAudioEnabled(nextAfterRecovery);
+      emitAudioPresence(nextAfterRecovery);
+      return;
+    }
     const next = !track.enabled;
+    desiredAudioEnabledRef.current = next;
     track.enabled = next;
     audioEnabledRef.current = next;
     setAudioEnabled(next);
-    socketRef.current?.emit("participant-media-updated", {
-      roomId,
-      updates: { audioEnabled: next },
-    });
+    emitAudioPresence(next);
   };
 
   const toggleVideo = () => {
@@ -401,6 +403,21 @@ const MeetingRoomPage = () => {
     socketRef.current?.emit("host-action", { roomId, targetPeerId, action });
   };
 
+  const handleHostPinForAll = (targetPeerId = "") => {
+    socketRef.current?.emit("host-set-pin-all", {
+      roomId,
+      targetPeerId: targetPeerId || "",
+    });
+  };
+
+  const handleHostAdmitParticipant = (targetPeerId) => {
+    socketRef.current?.emit("host-admit-participant", { roomId, targetPeerId });
+  };
+
+  const handleHostRejectParticipant = (targetPeerId) => {
+    socketRef.current?.emit("host-reject-participant", { roomId, targetPeerId });
+  };
+
   const handleEndMeeting = async () => {
     try {
       await endMeetingSession(roomId);
@@ -408,6 +425,12 @@ const MeetingRoomPage = () => {
     } catch {
       setError("Failed to end meeting session.");
     }
+  };
+
+  const handleLeaveMeeting = () => {
+    socketRef.current?.emit("leave-room", { roomId });
+    socketRef.current?.disconnect();
+    navigate("/meet");
   };
 
   const hasSecureMediaContext = () => {
@@ -518,6 +541,7 @@ const MeetingRoomPage = () => {
 
       const hasAudioTrack = stream.getAudioTracks().length > 0;
       const hasVideoTrack = stream.getVideoTracks().length > 0;
+      desiredAudioEnabledRef.current = hasAudioTrack;
       audioEnabledRef.current = hasAudioTrack;
       videoEnabledRef.current = hasVideoTrack;
       setAudioEnabled(hasAudioTrack);
@@ -541,6 +565,48 @@ const MeetingRoomPage = () => {
       setRequestingPermissions(false);
     }
   };
+
+  const ensureLiveMicrophoneTrack = useCallback(async () => {
+    if (!desiredAudioEnabledRef.current) {
+      // Respect explicit user mute choice.
+      return true;
+    }
+    const currentAudioTrack = localStreamRef.current?.getAudioTracks?.()[0];
+    if (currentAudioTrack && currentAudioTrack.readyState === "live") {
+      return true;
+    }
+    try {
+      const audioOnlyStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      });
+      const recoveredTrack = audioOnlyStream.getAudioTracks?.()[0];
+      if (!recoveredTrack) return false;
+
+      if (!localStreamRef.current) {
+        localStreamRef.current = new MediaStream();
+      }
+      const oldTrack = localStreamRef.current.getAudioTracks?.()[0];
+      if (oldTrack) {
+        localStreamRef.current.removeTrack(oldTrack);
+        oldTrack.stop();
+      }
+      localStreamRef.current.addTrack(recoveredTrack);
+      recoveredTrack.enabled = desiredAudioEnabledRef.current;
+      audioEnabledRef.current = desiredAudioEnabledRef.current;
+      setAudioEnabled(desiredAudioEnabledRef.current);
+      setMediaPermissionGranted(true);
+      replaceOutgoingAudioTrack(recoveredTrack);
+      emitAudioPresence(desiredAudioEnabledRef.current);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [emitAudioPresence, replaceOutgoingAudioTrack]);
 
   useEffect(() => {
     if (!user) return;
@@ -651,14 +717,37 @@ const MeetingRoomPage = () => {
           setParticipants(list || []);
         });
 
-        socket.on("room-pin-updated", ({ forcedPinnedPeerId: forcedPeerId, sharingPeerIds }) => {
+        socket.on(
+          "room-pin-updated",
+          ({ forcedPinnedPeerId: forcedPeerId, sharingPeerIds, hostPinnedPeerId: hostPinnedId }) => {
           setForcedPinnedPeerId(forcedPeerId || "");
+          setHostPinnedPeerId(hostPinnedId || "");
           setSharingPeerIds(sharingPeerIds || []);
-        });
+          }
+        );
 
         socket.on("host-unavailable", ({ message }) => {
           setError(message || "You will be let in when admin joins.");
-          setTimeout(() => navigate("/meet"), 1500);
+          setJoinApprovalStatus("waiting");
+        });
+
+        socket.on("join-waiting-approval", ({ message }) => {
+          setError(message || "Waiting for host to admit you.");
+          setJoinApprovalStatus("waiting");
+        });
+
+        socket.on("admission-approved", ({ message }) => {
+          setError(message || "");
+          setJoinApprovalStatus("approved");
+        });
+
+        socket.on("admission-denied", ({ message }) => {
+          setJoinApprovalStatus("denied");
+          setError(message || "Host did not admit your request.");
+        });
+
+        socket.on("waiting-participants-updated", ({ waiting }) => {
+          setWaitingParticipants(waiting || []);
         });
 
         socket.on("host-action", ({ action, by }) => {
@@ -666,6 +755,7 @@ const MeetingRoomPage = () => {
             const track = localStreamRef.current?.getAudioTracks()[0];
             if (track) {
               track.enabled = false;
+              desiredAudioEnabledRef.current = false;
               audioEnabledRef.current = false;
               setAudioEnabled(false);
             }
@@ -675,6 +765,7 @@ const MeetingRoomPage = () => {
             const track = localStreamRef.current?.getAudioTracks()[0];
             if (track) {
               track.enabled = true;
+              desiredAudioEnabledRef.current = true;
               audioEnabledRef.current = true;
               setAudioEnabled(true);
             }
@@ -762,7 +853,7 @@ const MeetingRoomPage = () => {
           mobileDockTimerRef.current = null;
         }
       } else {
-        setShowMobileDock(false);
+        setShowMobileDock(true);
       }
     };
     updateViewportMode();
@@ -771,6 +862,9 @@ const MeetingRoomPage = () => {
       mediaQuery.removeEventListener("change", updateViewportMode);
       if (mobileDockTimerRef.current) {
         clearTimeout(mobileDockTimerRef.current);
+      }
+      if (desktopDockTimerRef.current) {
+        clearTimeout(desktopDockTimerRef.current);
       }
     };
   }, []);
@@ -782,14 +876,68 @@ const MeetingRoomPage = () => {
     return () => clearInterval(interval);
   }, [pruneOldReactions]);
 
+  useEffect(() => {
+    if (!joinedCall) return;
+    const interval = setInterval(() => {
+      const track = localStreamRef.current?.getAudioTracks?.()[0];
+      if (!track || track.readyState === "ended") {
+        ensureLiveMicrophoneTrack().then((ok) => {
+          if (!ok) {
+            setPermissionMessage(
+              "Microphone disconnected. Please reopen browser site settings and allow microphone."
+            );
+          }
+        });
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [joinedCall, ensureLiveMicrophoneTrack]);
+
+  const closeFloatingUi = useCallback(() => {
+    setShowEmojiPicker(false);
+    setShowHamburgerMenu(false);
+    setShowParticipantsPanel(false);
+    setShowChatPanel(false);
+    setShowDiagnostics(false);
+  }, []);
+
+  useEffect(() => {
+    const handleOutside = (event) => {
+      const target = event.target;
+      const insidePopup =
+        emojiPickerRef.current?.contains(target) ||
+        hamburgerMenuRef.current?.contains(target) ||
+        participantsPanelRef.current?.contains(target) ||
+        chatPanelRef.current?.contains(target) ||
+        diagnosticsPanelRef.current?.contains(target);
+      if (!insidePopup) {
+        closeFloatingUi();
+      }
+    };
+    document.addEventListener("mousedown", handleOutside);
+    document.addEventListener("touchstart", handleOutside, { passive: true });
+    return () => {
+      document.removeEventListener("mousedown", handleOutside);
+      document.removeEventListener("touchstart", handleOutside);
+    };
+  }, [closeFloatingUi]);
+
   const handleJoinNow = async () => {
     if (!displayName.trim()) {
       setError("Display name is required.");
       return;
     }
+    setJoinApprovalStatus("approved");
+    setError("");
     if (!mediaPermissionGranted) {
       const granted = await requestMediaPermissions();
       if (!granted) return;
+    }
+    const microphoneRecovered = await ensureLiveMicrophoneTrack();
+    if (!microphoneRecovered) {
+      setPermissionMessage(
+        "Microphone is unavailable on this device/browser. Please allow microphone and try again."
+      );
     }
     await updateProfile({ name: displayName.trim(), avatarUrl, theme });
     setJoinedCall(true);
@@ -851,23 +999,37 @@ const MeetingRoomPage = () => {
     stream: localStreamRef.current,
     subtitle: displayName || user?.name || "",
     videoEnabled,
+    audioEnabled,
   };
   const remoteTiles = remoteStreams.map((participant) => {
     const participantMeta = participants.find((item) => item.peerId === participant.peerId);
+    const streamAudioTrack = participant.stream?.getAudioTracks?.()[0];
+    const streamVideoTrack = participant.stream?.getVideoTracks?.()[0];
+    const resolvedAudioEnabled =
+      participantMeta?.audioEnabled ??
+      (streamAudioTrack ? streamAudioTrack.readyState === "live" : true);
+    const resolvedVideoEnabled =
+      (streamVideoTrack && streamVideoTrack.readyState === "live") ||
+      participantMeta?.videoEnabled === true;
     return {
       ...participant,
       avatarUrl: participantMeta?.avatarUrl || "",
       subtitle: participant.peerId,
-      videoEnabled: participantMeta?.videoEnabled ?? true,
+      videoEnabled: resolvedVideoEnabled,
+      audioEnabled: resolvedAudioEnabled,
     };
   });
   const allTiles = [localTile, ...remoteTiles];
-  const pinnedTile = allTiles.find((tile) => tile.peerId === effectivePinnedPeerId);
-  const nonPinnedTiles = allTiles.filter((tile) => tile.peerId !== effectivePinnedPeerId);
-  const pageSize = pinnedTile ? 8 : 9;
-  const totalPages = Math.max(1, Math.ceil(nonPinnedTiles.length / pageSize));
+  const orderedTiles = effectivePinnedPeerId
+    ? [
+        ...allTiles.filter((tile) => tile.peerId === effectivePinnedPeerId),
+        ...allTiles.filter((tile) => tile.peerId !== effectivePinnedPeerId),
+      ]
+    : allTiles;
+  const pageSize = 9;
+  const totalPages = Math.max(1, Math.ceil(orderedTiles.length / pageSize));
   const currentPage = Math.min(tilePage, totalPages - 1);
-  const visibleTiles = nonPinnedTiles.slice(
+  const visibleTiles = orderedTiles.slice(
     currentPage * pageSize,
     currentPage * pageSize + pageSize
   );
@@ -912,16 +1074,75 @@ const MeetingRoomPage = () => {
     };
   });
 
-  const revealMobileDock = () => {
-    if (!isMobileViewport || !joinedCall) return;
+  useEffect(() => {
+    const availablePeerIds = new Set([
+      socketId || "local-preview",
+      ...remoteStreams.map((item) => item.peerId),
+    ]);
+    if (manualPinnedPeerId && !availablePeerIds.has(manualPinnedPeerId)) {
+      setManualPinnedPeerId("");
+    }
+    if (forcedPinnedPeerId && !availablePeerIds.has(forcedPinnedPeerId)) {
+      setForcedPinnedPeerId("");
+    }
+  }, [manualPinnedPeerId, forcedPinnedPeerId, remoteStreams, socketId]);
+
+  const revealControlsDock = useCallback(() => {
+    if (!joinedCall) return;
     setShowMobileDock(true);
     if (mobileDockTimerRef.current) {
       clearTimeout(mobileDockTimerRef.current);
     }
-    mobileDockTimerRef.current = setTimeout(() => {
+    if (desktopDockTimerRef.current) {
+      clearTimeout(desktopDockTimerRef.current);
+    }
+    const timer = setTimeout(() => {
       setShowMobileDock(false);
       mobileDockTimerRef.current = null;
-    }, 2500);
+      desktopDockTimerRef.current = null;
+    }, 10000);
+    if (isMobileViewport) {
+      mobileDockTimerRef.current = timer;
+    } else {
+      desktopDockTimerRef.current = timer;
+    }
+  }, [isMobileViewport, joinedCall]);
+
+  useEffect(() => {
+    if (!joinedCall) return;
+    revealControlsDock();
+  }, [joinedCall, revealControlsDock]);
+
+  const handleViewportMouseMove = (event) => {
+    if (!joinedCall || isMobileViewport) return;
+    if (event.clientY >= window.innerHeight - 120) {
+      revealControlsDock();
+    }
+  };
+
+  const handleTilesWheel = (event) => {
+    if (totalPages <= 1) return;
+    const now = Date.now();
+    if (now - tileWheelCooldownRef.current < 300) return;
+    if (Math.abs(event.deltaY) < 15) return;
+    tileWheelCooldownRef.current = now;
+    event.preventDefault();
+    if (event.deltaY > 0) {
+      setTilePage((page) => Math.min(totalPages - 1, page + 1));
+    } else {
+      setTilePage((page) => Math.max(0, page - 1));
+    }
+  };
+
+  const handleMicButtonTouchEnd = (event) => {
+    event.preventDefault();
+    lastMicTouchAtRef.current = Date.now();
+    toggleAudio();
+  };
+
+  const handleMicButtonClick = () => {
+    if (Date.now() - lastMicTouchAtRef.current < 500) return;
+    toggleAudio();
   };
 
   return (
@@ -931,8 +1152,9 @@ const MeetingRoomPage = () => {
           ? "dark bg-linear-to-b from-slate-950 via-slate-900 to-slate-950 text-white"
           : "bg-linear-to-b from-slate-100 via-white to-slate-100 text-slate-900"
       }`}
-      onTouchStart={revealMobileDock}
-      onClick={revealMobileDock}
+      onTouchStart={revealControlsDock}
+      onClick={revealControlsDock}
+      onMouseMove={handleViewportMouseMove}
     >
       <div className="mx-auto max-w-[1400px]">
         {!joinedCall ? (
@@ -981,7 +1203,10 @@ const MeetingRoomPage = () => {
         ) : null}
 
         {showEmojiPicker ? (
-          <div className="fixed right-3 top-24 z-[100] w-[min(360px,95vw)] rounded-xl border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+          <div
+            ref={emojiPickerRef}
+            className="fixed right-3 top-24 z-[100] w-[min(360px,95vw)] rounded-xl border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-700 dark:bg-slate-900"
+          >
             <div className="mb-2 flex items-center justify-between">
               <p className="text-sm font-medium">Send reaction</p>
               <button
@@ -1010,40 +1235,69 @@ const MeetingRoomPage = () => {
           </div>
         ) : null}
         {showHamburgerMenu ? (
-          <div className="fixed bottom-24 right-3 z-[95] w-[min(320px,92vw)] rounded-xl border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+          <div
+            ref={hamburgerMenuRef}
+            className="fixed bottom-24 right-3 z-[95] w-[min(320px,92vw)] rounded-xl border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-700 dark:bg-slate-900"
+          >
             <p className="mb-2 text-sm font-medium">Meeting Menu</p>
             <div className="grid gap-2">
               <button
                 type="button"
-                onClick={() => setShowChatPanel((value) => !value)}
+                onClick={() => {
+                  setShowChatPanel((value) => !value);
+                  setShowHamburgerMenu(false);
+                }}
                 className="ui-btn-ghost justify-start"
               >
                 {showChatPanel ? "Hide Chat" : "Open Chat"}
               </button>
               <button
                 type="button"
-                onClick={() => setShowParticipantsPanel((value) => !value)}
+                onClick={() => {
+                  setShowParticipantsPanel((value) => !value);
+                  setShowHamburgerMenu(false);
+                }}
                 className="ui-btn-ghost justify-start"
               >
                 {showParticipantsPanel ? "Hide Participants" : "Open Participants"}
               </button>
               <button
                 type="button"
-                onClick={() => setShowDiagnostics((value) => !value)}
+                onClick={() => {
+                  setShowDiagnostics((value) => !value);
+                  setShowHamburgerMenu(false);
+                }}
                 className="ui-btn-ghost justify-start"
               >
                 {showDiagnostics ? "Hide AV Diagnostics" : "Show AV Diagnostics"}
               </button>
               <button
                 type="button"
-                onClick={recording ? stopRecording : startRecording}
+                onClick={() => {
+                  if (recording) stopRecording();
+                  else startRecording();
+                  setShowHamburgerMenu(false);
+                }}
                 className="ui-btn-ghost justify-start"
               >
                 {recording ? "Stop Recording" : "Start Recording"}
               </button>
               <button
                 type="button"
-                onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+                onClick={() => {
+                  setShowHamburgerMenu(false);
+                  handleLeaveMeeting();
+                }}
+                className="ui-btn-ghost justify-start"
+              >
+                Leave Meeting
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTheme(theme === "dark" ? "light" : "dark");
+                  setShowHamburgerMenu(false);
+                }}
                 className="ui-btn-ghost justify-start"
               >
                 Switch to {theme === "dark" ? "Light" : "Dark"} Theme
@@ -1052,14 +1306,31 @@ const MeetingRoomPage = () => {
                 <>
                   <button
                     type="button"
-                    onClick={toggleAllowAllParticipants}
+                    onClick={() => {
+                      handleHostPinForAll("");
+                      setShowHamburgerMenu(false);
+                    }}
+                    disabled={!hostPinnedPeerId}
+                    className="ui-btn-ghost justify-start"
+                  >
+                    {hostPinnedPeerId ? "Clear Pin For All" : "No Global Pin Set"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toggleAllowAllParticipants();
+                      setShowHamburgerMenu(false);
+                    }}
                     className="ui-btn-ghost justify-start"
                   >
                     {allowAllParticipants ? "Disable Public Join" : "Enable Public Join"}
                   </button>
                   <button
                     type="button"
-                    onClick={handleEndMeeting}
+                    onClick={() => {
+                      setShowHamburgerMenu(false);
+                      handleEndMeeting();
+                    }}
                     className="ui-btn-danger justify-start"
                   >
                     End Meeting for All
@@ -1069,7 +1340,11 @@ const MeetingRoomPage = () => {
               {sharingPeerIds.length > 1 ? (
                 <select
                   value={manualPinnedPeerId}
-                  onChange={(event) => setManualPinnedPeerId(event.target.value)}
+                  onChange={(event) => {
+                    setTilePage(0);
+                    setManualPinnedPeerId(event.target.value);
+                    setShowHamburgerMenu(false);
+                  }}
                   className="rounded border border-slate-300 bg-white px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-800"
                 >
                   <option value="">Choose pinned share</option>
@@ -1088,7 +1363,7 @@ const MeetingRoomPage = () => {
           </div>
         ) : null}
         {showDiagnostics ? (
-          <div className="ui-card mb-3 p-3 text-xs">
+          <div ref={diagnosticsPanelRef} className="ui-card mb-3 p-3 text-xs">
             <h3 className="mb-2 text-sm font-semibold">Audio/Video Diagnostics</h3>
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <div className="rounded border border-slate-200 p-2 dark:border-slate-700">
@@ -1149,6 +1424,27 @@ const MeetingRoomPage = () => {
             {error}
           </p>
         ) : null}
+        {joinedCall && joinApprovalStatus === "waiting" ? (
+          <div className="mb-3 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+            Waiting for host approval. You will join automatically once admitted.
+          </div>
+        ) : null}
+        {joinedCall && joinApprovalStatus === "denied" ? (
+          <div className="mb-3 flex flex-wrap items-center gap-2 rounded border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+            <span>Host denied your request.</span>
+            <button
+              type="button"
+              onClick={() => {
+                setJoinApprovalStatus("approved");
+                setJoinedCall(false);
+                socketRef.current?.disconnect();
+              }}
+              className="rounded border border-rose-400 px-2 py-0.5 text-xs"
+            >
+              Back to pre-join
+            </button>
+          </div>
+        ) : null}
         {meetingStartedAt ? (
           <p className="mb-3 text-xs text-slate-400">
             Session started: {new Date(meetingStartedAt).toLocaleString()}
@@ -1156,79 +1452,67 @@ const MeetingRoomPage = () => {
         ) : null}
 
         <div className="grid gap-4 lg:grid-cols-1">
-          <div className="mx-auto w-full max-w-[1240px]">
-            {pinnedTile ? (
-              <div className="mx-auto mb-3 max-w-[1120px]">
-                {pinnedTile.peerId === localTile.peerId ? (
-                  <VideoTile
-                    title={localTile.userName}
-                    subtitle="Pinned"
-                    videoRef={localVideoRef}
-                    muted
-                    videoEnabled={localTile.videoEnabled}
-                    pinned
-                    canPin
-                    avatarUrl={avatarUrl}
-                    onTogglePin={() => setManualPinnedPeerId("")}
-                  />
-                ) : (
-                  <RemoteVideo
-                    peerId={pinnedTile.peerId}
-                    userName={pinnedTile.userName}
-                    subtitle="Pinned"
-                    stream={pinnedTile.stream}
-                    videoEnabled={pinnedTile.videoEnabled}
-                    pinned
-                    avatarUrl={pinnedTile.avatarUrl}
-                    onTogglePin={() => setManualPinnedPeerId("")}
-                  />
-                )}
-              </div>
-            ) : null}
+          <div
+            ref={tilesContainerRef}
+            onWheel={handleTilesWheel}
+            className="mx-auto w-full max-w-[1240px]"
+          >
             <div className={`mx-auto grid max-w-[1240px] gap-3 ${gridColsClass}`}>
-              {visibleTiles.map((participant) =>
-                participant.peerId === localTile.peerId ? (
-                  <VideoTile
-                    key="local-video"
-                    title="You"
-                    subtitle={displayName || user?.name}
-                    videoRef={localVideoRef}
-                    muted
-                    videoEnabled={localTile.videoEnabled}
-                    avatarUrl={avatarUrl}
-                    canPin
-                    pinned={effectivePinnedPeerId === localTile.peerId}
-                    onTogglePin={() =>
-                      setManualPinnedPeerId((current) =>
-                        current === localTile.peerId ? "" : localTile.peerId
-                      )
-                    }
-                  />
-                ) : (
-                  <RemoteVideo
-                    key={participant.peerId}
-                    peerId={participant.peerId}
-                    userName={participant.userName}
-                    subtitle={participant.subtitle}
-                    stream={participant.stream}
-                    videoEnabled={participant.videoEnabled}
-                    avatarUrl={participant.avatarUrl}
-                    pinned={effectivePinnedPeerId === participant.peerId}
-                    onTogglePin={() =>
-                      setManualPinnedPeerId((current) =>
-                        current === participant.peerId ? "" : participant.peerId
-                      )
-                    }
-                  />
-                )
-              )}
+              {visibleTiles.map((participant, index) => {
+                const isPinned = effectivePinnedPeerId === participant.peerId;
+                const isPinnedFirstTile = Boolean(effectivePinnedPeerId) && index === 0 && isPinned;
+                return (
+                  <div
+                    key={participant.peerId === localTile.peerId ? "local-video" : participant.peerId}
+                    className={isPinnedFirstTile ? "sm:col-span-2 lg:col-span-3" : ""}
+                  >
+                    {participant.peerId === localTile.peerId ? (
+                      <VideoTile
+                        title="You"
+                        subtitle={isPinned ? "Pinned" : displayName || user?.name}
+                        videoRef={localVideoRef}
+                        muted
+                        videoEnabled={localTile.videoEnabled}
+                        audioEnabled={localTile.audioEnabled}
+                        avatarUrl={avatarUrl}
+                        canPin
+                        pinned={isPinned}
+                        onTogglePin={() => {
+                          setTilePage(0);
+                          setManualPinnedPeerId((current) =>
+                            current === localTile.peerId ? "" : localTile.peerId
+                          );
+                        }}
+                      />
+                    ) : (
+                      <RemoteVideo
+                        peerId={participant.peerId}
+                        userName={participant.userName}
+                        subtitle={isPinned ? "Pinned" : participant.subtitle}
+                        stream={participant.stream}
+                        videoEnabled={participant.videoEnabled}
+                        audioEnabled={participant.audioEnabled}
+                        avatarUrl={participant.avatarUrl}
+                        pinned={isPinned}
+                        onTogglePin={() => {
+                          setTilePage(0);
+                          setManualPinnedPeerId((current) =>
+                            current === participant.peerId ? "" : participant.peerId
+                          );
+                        }}
+                      />
+                    )}
+                  </div>
+                );
+              })}
             </div>
             {totalPages > 1 ? (
-              <div className="mt-3 flex items-center justify-center gap-3 text-sm">
+              <div className="mt-3 flex items-center justify-center gap-2 text-xs">
                 <button
                   type="button"
                   onClick={() => setTilePage((page) => Math.max(0, page - 1))}
-                  className="rounded border border-slate-300 px-2 py-1 dark:border-slate-700"
+                  className="rounded border border-slate-300 px-2 py-0.5 dark:border-slate-700"
+                  title="Previous page"
                 >
                   ◀
                 </button>
@@ -1238,7 +1522,8 @@ const MeetingRoomPage = () => {
                 <button
                   type="button"
                   onClick={() => setTilePage((page) => Math.min(totalPages - 1, page + 1))}
-                  className="rounded border border-slate-300 px-2 py-1 dark:border-slate-700"
+                  className="rounded border border-slate-300 px-2 py-0.5 dark:border-slate-700"
+                  title="Next page"
                 >
                   ▶
                 </button>
@@ -1247,7 +1532,10 @@ const MeetingRoomPage = () => {
           </div>
         </div>
         {showParticipantsPanel ? (
-          <div className="fixed left-3 top-28 z-[60] h-[min(72vh,620px)] w-[min(300px,92vw)] overflow-auto rounded-xl border border-slate-700 bg-white p-3 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+          <div
+            ref={participantsPanelRef}
+            className="fixed left-3 top-28 z-[60] h-[min(72vh,620px)] w-[min(300px,92vw)] overflow-auto rounded-xl border border-slate-700 bg-white p-3 shadow-xl dark:border-slate-800 dark:bg-slate-900"
+          >
             <div className="mb-2 flex items-center justify-between">
               <h2 className="text-lg font-medium">People</h2>
               <button
@@ -1264,6 +1552,45 @@ const MeetingRoomPage = () => {
               placeholder="Search participants"
               className="mb-3 w-full rounded border border-slate-300 bg-white px-2 py-2 text-sm outline-none focus:ring dark:border-slate-700 dark:bg-slate-800"
             />
+            {isHost && !allowAllParticipants ? (
+              <>
+                <p className="mb-1 text-xs font-semibold text-slate-500">
+                  Waiting for approval ({waitingParticipants.length})
+                </p>
+                <div className="mb-3 max-h-36 space-y-2 overflow-auto rounded border border-slate-300 p-2 dark:border-slate-800">
+                  {waitingParticipants.length === 0 ? (
+                    <p className="text-xs text-slate-400">No pending requests.</p>
+                  ) : (
+                    waitingParticipants.map((pending) => (
+                      <div
+                        key={pending.peerId}
+                        className="flex items-center justify-between gap-2 rounded bg-slate-100 p-2 text-xs dark:bg-slate-800"
+                      >
+                        <span className="truncate">{pending.name || "Participant"}</span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleHostAdmitParticipant(pending.peerId)}
+                            className="rounded border border-emerald-500 px-2 py-0.5 text-emerald-600"
+                            title="Admit participant"
+                          >
+                            Admit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleHostRejectParticipant(pending.peerId)}
+                            className="rounded border border-rose-500 px-2 py-0.5 text-rose-500"
+                            title="Reject participant"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            ) : null}
             <p className="mb-1 text-xs font-semibold text-slate-500">In this meeting</p>
             <div className="mb-3 max-h-44 space-y-2 overflow-auto rounded border border-slate-300 p-2 dark:border-slate-800">
               {searchedCurrentParticipants.map((participant) => (
@@ -1272,9 +1599,23 @@ const MeetingRoomPage = () => {
                   className="rounded bg-slate-100 p-2 text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-200"
                 >
                   <div className="flex items-center justify-between">
-                    <p className="font-medium">
-                      {participant.name} {participant.isHost ? "(Host)" : ""}
-                    </p>
+                    <div className="flex items-center gap-2">
+                      {participant.avatarUrl ? (
+                        <img
+                          src={participant.avatarUrl}
+                          alt={participant.name}
+                          className="h-6 w-6 rounded-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-300 text-[10px] font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-100">
+                          {(participant.name || "U").slice(0, 1).toUpperCase()}
+                        </div>
+                      )}
+                      <p className="font-medium">
+                        {participant.name} {participant.isHost ? "(Host)" : ""}
+                        {hostPinnedPeerId === participant.peerId ? " (Pinned for all)" : ""}
+                      </p>
+                    </div>
                     <span>
                       A:{participant.audioEnabled ? "on" : "off"} V:
                       {participant.videoEnabled ? "on" : "off"}
@@ -1284,7 +1625,18 @@ const MeetingRoomPage = () => {
                     <div className="mt-2 flex gap-1">
                       <button
                         type="button"
-                        onClick={() => handleHostAction(participant.peerId, "mute-audio")}
+                        onClick={() => handleHostPinForAll(participant.peerId)}
+                        className="rounded border border-indigo-400 px-2 py-1 text-indigo-500"
+                        title="Pin for all participants"
+                      >
+                        📌
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleHostAction(participant.peerId, "mute-audio");
+                          setShowParticipantsPanel(false);
+                        }}
                         className="rounded border border-slate-300 px-2 py-1 dark:border-slate-700"
                         title="Mute participant"
                       >
@@ -1292,7 +1644,10 @@ const MeetingRoomPage = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleHostAction(participant.peerId, "unmute-audio")}
+                        onClick={() => {
+                          handleHostAction(participant.peerId, "unmute-audio");
+                          setShowParticipantsPanel(false);
+                        }}
                         className="rounded border border-slate-300 px-2 py-1 dark:border-slate-700"
                         title="Unmute participant"
                       >
@@ -1300,7 +1655,10 @@ const MeetingRoomPage = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleHostAction(participant.peerId, "mute-video")}
+                        onClick={() => {
+                          handleHostAction(participant.peerId, "mute-video");
+                          setShowParticipantsPanel(false);
+                        }}
                         className="rounded border border-slate-300 px-2 py-1 dark:border-slate-700"
                         title="Turn camera off"
                       >
@@ -1308,7 +1666,10 @@ const MeetingRoomPage = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleHostAction(participant.peerId, "unmute-video")}
+                        onClick={() => {
+                          handleHostAction(participant.peerId, "unmute-video");
+                          setShowParticipantsPanel(false);
+                        }}
                         className="rounded border border-slate-300 px-2 py-1 dark:border-slate-700"
                         title="Turn camera on"
                       >
@@ -1316,7 +1677,10 @@ const MeetingRoomPage = () => {
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleHostAction(participant.peerId, "remove")}
+                        onClick={() => {
+                          handleHostAction(participant.peerId, "remove");
+                          setShowParticipantsPanel(false);
+                        }}
                         className="rounded border border-rose-400 px-2 py-1 text-rose-500"
                         title="Remove participant"
                       >
@@ -1343,7 +1707,10 @@ const MeetingRoomPage = () => {
           </div>
         ) : null}
         {showChatPanel ? (
-          <div className="fixed right-3 top-28 z-[60] flex h-[min(74vh,680px)] w-[min(360px,92vw)] flex-col rounded-xl border border-slate-700 bg-white p-3 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+          <div
+            ref={chatPanelRef}
+            className="fixed right-3 top-28 z-[60] flex h-[min(74vh,680px)] w-[min(360px,92vw)] flex-col rounded-xl border border-slate-700 bg-white p-3 shadow-xl dark:border-slate-800 dark:bg-slate-900"
+          >
             <div className="mb-2 flex items-center justify-between">
               <h2 className="text-lg font-medium">Live Chat</h2>
               <button
@@ -1394,62 +1761,12 @@ const MeetingRoomPage = () => {
               )}
             </div>
             <form onSubmit={sendChatMessage} className="mt-2 flex flex-wrap gap-2">
-              <select
-                value={chatMode}
-                onChange={(event) => setChatMode(event.target.value)}
-                className="min-w-[110px] rounded border border-slate-300 bg-white px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-800"
-              >
-                <option value="text">Text</option>
-                <option value="emoji">Emoji</option>
-                <option value="code">Code</option>
-                <option value="media">Photo/Video URL</option>
-              </select>
-              {chatMode === "code" ? (
-                <input
-                  value={codeLanguage}
-                  onChange={(event) => setCodeLanguage(event.target.value)}
-                  placeholder="Lang"
-                  className="min-w-[110px] rounded border border-slate-300 bg-white px-2 py-2 text-sm dark:border-slate-700 dark:bg-slate-800"
-                />
-              ) : null}
-              {chatMode === "code" ? (
-                <textarea
-                  value={chatInput}
-                  onChange={(event) => setChatInput(event.target.value)}
-                  placeholder="Paste or type code..."
-                  rows={6}
-                  className="min-w-[180px] flex-1 rounded border border-slate-300 bg-white px-3 py-2 font-mono text-sm outline-none ring-indigo-500 focus:ring dark:border-slate-700 dark:bg-slate-800"
-                />
-              ) : (
-                <input
-                  value={chatInput}
-                  onChange={(event) => setChatInput(event.target.value)}
-                  placeholder="Type a message..."
-                  className="min-w-[180px] flex-1 rounded border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-indigo-500 focus:ring dark:border-slate-700 dark:bg-slate-800"
-                />
-              )}
-              {chatMode === "media" ? (
-                <input
-                  value={mediaUrl}
-                  onChange={(event) => setMediaUrl(event.target.value)}
-                  placeholder="https://..."
-                  className="min-w-[180px] flex-1 rounded border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-indigo-500 focus:ring dark:border-slate-700 dark:bg-slate-800"
-                />
-              ) : null}
-              <label className="rounded border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800">
-                Upload files
-                <input
-                  type="file"
-                  multiple
-                  accept=".pdf,.doc,.docx,.ppt,.pptx,image/*,video/*,.txt,.md,.csv,.json,.js,.ts,.py,.java,.cpp,.c,.zip"
-                  className="hidden"
-                  onChange={(event) => {
-                    const selected = Array.from(event.target.files || []);
-                    setChatFiles((previous) => [...previous, ...selected].slice(0, 8));
-                    event.target.value = "";
-                  }}
-                />
-              </label>
+              <input
+                value={chatInput}
+                onChange={(event) => setChatInput(event.target.value)}
+                placeholder="Type a message (text or emoji)..."
+                className="min-w-[180px] flex-1 rounded border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-indigo-500 focus:ring dark:border-slate-700 dark:bg-slate-800"
+              />
               <button
                 type="submit"
                 className="rounded bg-indigo-500 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-400"
@@ -1457,26 +1774,12 @@ const MeetingRoomPage = () => {
                 Send
               </button>
             </form>
-            {chatFiles.length ? (
-              <div className="mt-2 flex flex-wrap gap-2">
-                {chatFiles.map((file, index) => (
-                  <button
-                    key={`${file.name}-${file.size}-${index}`}
-                    type="button"
-                    className="rounded bg-slate-100 px-2 py-1 text-xs dark:bg-slate-800"
-                    onClick={() =>
-                      setChatFiles((previous) => previous.filter((_, fileIndex) => fileIndex !== index))
-                    }
-                    title="Click to remove file"
-                  >
-                    {file.name}
-                  </button>
-                ))}
-              </div>
-            ) : null}
             <button
               type="button"
-              onClick={clearChat}
+              onClick={() => {
+                clearChat();
+                setShowChatPanel(false);
+              }}
               className="mt-2 text-left text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
             >
               Clear chat
@@ -1502,12 +1805,13 @@ const MeetingRoomPage = () => {
           </div>
         ))}
       </div>
-      {joinedCall && (!isMobileViewport || showMobileDock) ? (
+      {joinedCall && showMobileDock ? (
         <div className="fixed bottom-[max(0.75rem,env(safe-area-inset-bottom))] left-1/2 z-[90] -translate-x-1/2">
           <div className="flex items-center gap-2 rounded-2xl border border-slate-700 bg-slate-900/95 px-2 py-2 shadow-lg backdrop-blur md:gap-3 md:px-3">
             <button
               type="button"
-              onClick={toggleAudio}
+              onClick={handleMicButtonClick}
+              onTouchEnd={handleMicButtonTouchEnd}
               disabled={!mediaPermissionGranted}
               title={audioEnabled ? "Mute microphone" : "Unmute microphone"}
               className="flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-700 bg-slate-800 hover:bg-slate-700 disabled:opacity-60 md:h-14 md:w-14"
@@ -1550,9 +1854,9 @@ const MeetingRoomPage = () => {
           </div>
         </div>
       ) : null}
-      {joinedCall && isMobileViewport && !showMobileDock ? (
+      {joinedCall && !showMobileDock ? (
         <div className="pointer-events-none fixed bottom-2 left-1/2 z-[85] -translate-x-1/2 rounded-full bg-black/35 px-3 py-1 text-[11px] text-white">
-          Tap screen for controls
+          {isMobileViewport ? "Tap screen for controls" : "Move cursor to bottom for controls"}
         </div>
       ) : null}
     </div>
@@ -1566,17 +1870,36 @@ const RemoteVideo = ({
   stream,
   avatarUrl,
   videoEnabled = true,
+  audioEnabled = true,
   pinned = false,
   onTogglePin,
 }) => {
   const videoRef = useRef(null);
 
   useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.srcObject = stream;
-      videoRef.current.play().catch(() => {});
+    if (!videoRef.current) return;
+    const videoElement = videoRef.current;
+    videoElement.srcObject = stream || null;
+    if (!stream) return;
+
+    // Pin/unpin can remount tiles; ensure playback resumes reliably.
+    const resumePlayback = () => {
+      videoElement.play().catch(() => {});
+    };
+    const videoTrack = stream.getVideoTracks?.()[0];
+    const onTrackUnmute = () => resumePlayback();
+    if (videoTrack) {
+      videoTrack.addEventListener("unmute", onTrackUnmute);
     }
-  }, [stream]);
+    videoElement.addEventListener("loadedmetadata", resumePlayback);
+    resumePlayback();
+    return () => {
+      if (videoTrack) {
+        videoTrack.removeEventListener("unmute", onTrackUnmute);
+      }
+      videoElement.removeEventListener("loadedmetadata", resumePlayback);
+    };
+  }, [stream, pinned]);
 
   return (
     <VideoTile
@@ -1584,6 +1907,7 @@ const RemoteVideo = ({
       subtitle={subtitle || peerId}
       videoRef={videoRef}
       videoEnabled={videoEnabled}
+      audioEnabled={audioEnabled}
       avatarUrl={avatarUrl}
       canPin
       pinned={pinned}
