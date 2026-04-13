@@ -720,9 +720,21 @@ const MeetingRoomPage = () => {
         socket.on(
           "room-pin-updated",
           ({ forcedPinnedPeerId: forcedPeerId, sharingPeerIds, hostPinnedPeerId: hostPinnedId }) => {
-          setForcedPinnedPeerId(forcedPeerId || "");
-          setHostPinnedPeerId(hostPinnedId || "");
-          setSharingPeerIds(sharingPeerIds || []);
+            setForcedPinnedPeerId((current) => {
+              const next = forcedPeerId || "";
+              if (current !== next) {
+                setTilePage(0);
+              }
+              return next;
+            });
+            setHostPinnedPeerId((current) => {
+              const next = hostPinnedId || "";
+              if (current !== next) {
+                setTilePage(0);
+              }
+              return next;
+            });
+            setSharingPeerIds(sharingPeerIds || []);
           }
         );
 
